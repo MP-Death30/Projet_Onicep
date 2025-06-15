@@ -32,7 +32,7 @@ def input_non_empty(prompt):
 
 def create_driver():
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
+    # options.add_argument("--headless=new")  # facultatif pour debug
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
@@ -45,7 +45,7 @@ def encoder_text_personnalise(text):
 
 def construire_url(mot_cle, niveau_code):
     base_url = "https://www.onisep.fr/recherche"
-
+    
     niveau_label = NIVEAU_MAPPING.get(niveau_code.strip(), "")
     if not niveau_label:
         niveau_label = "après bac"
@@ -64,7 +64,7 @@ def construire_url(mot_cle, niveau_code):
     return url
 
 
-# =================== Première page de recherche ====================
+
 def rechercher_formations(url, max_results=20):
     base_url = "https://www.onisep.fr"
     driver = create_driver()
@@ -106,11 +106,11 @@ def rechercher_formations(url, max_results=20):
     driver.quit()
     return formations
 
-# ======= Sortie Nom formation + URL =========
 
 
 
-# ====== Faire en sorte de récupérer l'URL de formation pour ensuite faire les clicks pour restrainde la localisation ======
+
+
 def renseigner_localisation(driver, localisation):
     try:
         # Attendre que le champ de localisation soit visible
@@ -141,100 +141,6 @@ def renseigner_localisation(driver, localisation):
 
 
 
-# Récupérer l'URL de la formation + lancer le click barre de recherche (localisation) + extraction des infos complémentaire
-def formations(driver,url, localisation):
-    wait = WebDriverWait(driver, 10)
-    driver.get(url)
-    time.sleep(5)
-
-    formations = []
-    #============= ^ valide ^ ==================
-
-    # Extraire la durée
-    try:
-        print("Tentative de récupération de la durée...")
-        duree = driver.find_element(
-            By.XPATH, "//div[contains(text(),'Durée de la formation')]/strong"
-        ).text.strip()
-        print(f"Durée : {duree}")
-    except Exception as e:
-        duree = "N/A"
-        print(f"Durée non trouvée : {e}")
-
-    # Extraire la nature de la formation
-    try:
-        print("Tentative de récupération de la nature de la formation...")
-        nature = driver.find_element(
-            By.XPATH, "//div[contains(@class, 'tag')][.//span[contains(text(),'Nature de la formation')]]//li//strong"
-        ).text.strip()
-        print(f"Nature : {nature}")
-    except Exception as e:
-        nature = "N/A"
-        print(f"Nature non trouvée : {e}")
-
-    # Extraire le type de formation
-    try:
-        print("Tentative de récupération du type de formation...")
-        type_formation = driver.find_element(
-            By.XPATH, "//div[contains(@class, 'tag') and .//text()[contains(.,'Type de formation')]]/span/strong"
-        ).text.strip()
-        print(f"Type : {type_formation}")
-    except Exception as e:
-        type_formation = "N/A"
-        print(f"Type non trouvé : {e}")
-
-
-    # Extraire les établissements (nom + commune + code postal)
-    etablissements = []
-    try:
-        table_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-        for tr in table_rows:
-            try:
-                nom = tr.find_element(By.TAG_NAME, "a").text.strip()
-                ville = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Commune"]').text.strip()
-                code_postal = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Code postal"]').text.strip()
-                etablissements.append(f"{nom} ({ville}, {code_postal})")
-            except:
-                continue
-    except:
-        pass
-
-        # Extraire les établissements (nom + commune + code postal)
-        # etablissements = []
-        # try:
-        #     table_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-        #     for tr in table_rows:
-        #         try:
-        #             a_tag = tr.find_element(By.TAG_NAME, "a")
-        #             nom = a_tag.text.strip()
-        #             lien = urljoin(base_url, a_tag.get_attribute("href"))
-        #             ville = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Commune"]').text.strip()
-        #             code_postal = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Code postal"]').text.strip()
-        #             etablissements.append(f"{nom} ({ville}, {code_postal}) → {lien}")
-        #         except:
-        #             continue
-        # except:
-        #     pass
-
-
-    # formations.append({
-    #     "durée": duree,
-    #     "nature": nature,
-    #     "type": type_formation,
-    #     "établissements conseillés": " | ".join(etablissements) if etablissements else "N/A"
-    # })
-
-    # Retour à la page de recherche
-    time.sleep(2)
-
-    driver.quit()
-    return {
-        "durée": duree,
-        "nature": nature,
-        "type": type_formation,
-        "établissements conseillés": " | ".join(etablissements) if etablissements else "N/A"
-    }
-
 
 
 def export_csv(data, filename="resultats_formations_onisep.csv"):
@@ -264,26 +170,21 @@ def main():
     max_results = int(max_results_str) if max_results_str.isdigit() else 10
     max_results = min(max_results, 50)
 
-
     search_url = construire_url(mot_cle, niveau)
-    src_formations = rechercher_formations(search_url, max_results=max_results)
-    
-    driver = create_driver()
-    full_data = []
+    formations = rechercher_formations(search_url, max_results=max_results)
 
-    for formation in src_formations:
-        print(f"Infos de {formation['titre']}...")
-        print(f"Infos de {formation['lien']}...")
-        test = formations(driver, formation['lien'], localisation)
-        # fulldata
-        print(f"Durée : {test['durée']}")
+    print(f"\n🔍 {len(formations)} formations trouvées :\n")
+    for f in formations:
+        print(f"{f['titre']} → {f['lien']}")
 
-        full_data.append({**formation, **test})
-    driver.quit()
-    
-   
-    export_csv(full_data)
+    export_csv(formations)
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
