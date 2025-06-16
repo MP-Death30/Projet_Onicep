@@ -114,29 +114,56 @@ def rechercher_formations(driver, url, max_results=20):
 # Saisie automatique de la localisation dans Onisep
 # ================================
 def renseigner_localisation(driver, localisation):
-
-    wait = WebDriverWait(driver, 10)
+    if not localisation:
+        return
+        
     try:
-        champ = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input[name='search-ui-geo-city']")))
-        driver.execute_script("arguments[0].scrollIntoView(true);", champ)
-        time.sleep(0.5)
-        try:
-            champ.click()
-        except:
-            # fallback click JS si le clic normal échoue
-            driver.execute_script("arguments[0].click();", champ)
-        champ.clear()
-        time.sleep(0.5)
-        champ.send_keys(localisation)
-        time.sleep(1.5)
-        try:
-            suggestion = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".autocomplete-list li a")))
-            suggestion.click()
-        except:
-            champ.send_keys(Keys.ENTER)
+        print(f"🔍 Tentative de filtrage par localisation : {localisation}")
+        wait = WebDriverWait(driver, 10)
+        
+        # Plusieurs sélecteurs possibles pour le champ de localisation
+        selectors = [
+            "input.geo-city",
+            "input[name='search-ui-geo-city']",
+            "input[placeholder*='ville']",
+            "input[placeholder*='localisation']"
+        ]
+        
+        input_geo = None
+        for selector in selectors:
+            try:
+                input_geo = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                print(f"✅ Champ de localisation trouvé avec : {selector}")
+                break
+            except:
+                continue
+                
+        if not input_geo:
+            print("⚠️ Champ de localisation non trouvé, pas de filtrage")
+            return
+            
+        # Remplir le champ
+        input_geo.clear()
+        time.sleep(1)
+        input_geo.send_keys(localisation)
         time.sleep(2)
-    except:
-        pass
+        
+        # Chercher la liste d'autocomplétion
+        try:
+            driver.execute_script("arguments[0].scrollIntoView(true);", input_geo)
+            autocomplete = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.autocomplete-list-wrapper a")))
+            time.sleep(1)
+            autocomplete.click()
+            print("✅ Localisation sélectionnée via autocomplétion")
+        except:
+            # Si pas d'autocomplétion, valider avec Enter
+            input_geo.send_keys(Keys.RETURN)
+            print("✅ Localisation validée avec Enter")
+
+        time.sleep(3)  # Attendre le filtrage
+        
+    except Exception as e:
+        print(f"❌ Erreur lors du filtrage par localisation : {e}")
 
 # ================================
 # Extraction des infos complémentaires sur une formation
