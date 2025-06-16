@@ -290,28 +290,35 @@ def export_csv(data, filename):
 # ================================
 def main():
     print("=== Recherche de formations sur Onisep.fr ===")
+
+    # Mot-clé
     mot_cle = input_non_empty("Mot-clé de recherche (ex: mathématiques) : ")
 
-    print("\nChoisis un niveau d’étude :")
+    # Niveau d'étude
+    print("\nChoisis un niveau d'étude :")
     print("  (laisser vide pour aucun filtre)")
     print("  1 → Bac +1 à +2")
     print("  3 → Bac +3")
     print("  4 → Bac +4 à +5")
     print("  6 → Bac +6 et +")
-    niveau = input("Ton choix (1, 3, 4, 6 ou vide) : ").strip()
+    niveau = input_non_empty("Ton choix (1, 3, 4, 6 ou vide) : ").strip()
 
+    # Zone géographique
     print("📍 Pour une **ville**, indique le code postal** (ex : Nîmes = 30000).")
     print("   Pour un **département** ou une **région**, indique son **nom complet** (ex : Gard, Occitanie).")
     localisation = input_localisation()
 
-    max_results_str = input("Nombre max de résultats (défaut = 10, max = 50) : ").strip()
+    # Nombre de résultats attendus
+    max_results_str = input_non_empty("Nombre max de résultats (défaut = 10, max = 50) : ").strip()
     max_results = int(max_results_str) if max_results_str.isdigit() else 10
     max_results = min(max_results, 50)
 
-    nom_fichier = input("Nom du fichier en sortie : ").strip()
+    # Nom du fichier
+    nom_fichier = input_non_empty("Nom du fichier en sortie : ").strip()
 
     driver = create_driver()
 
+    # Lancement des diverses fonctions
     try:
         search_url = construire_url(mot_cle, niveau)
         src_formations = rechercher_formations(driver, search_url, max_results=max_results)
