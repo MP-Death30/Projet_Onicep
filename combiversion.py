@@ -1,6 +1,7 @@
 import csv
 import time
-from urllib.parse import urlencode, urljoin, quote, urlparse, parse_qs, urlunparse
+import re
+from urllib.parse import urlencode, urljoin, quote
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -9,19 +10,21 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
-
-# Dictionnaire des niveaux d'études → valeur d'URL attendue par Onisep
+# ================================
+# Niveaux d'études Onisep (mapping code → libellé)
+# ================================
 NIVEAU_MAPPING = {
-    "": "",  # Aucun filtre
+    "": "",
     "1": "après bac/Bac +1 à +2",
-    "2": "après bac/Bac +1 à +2",
     "3": "après bac/Bac +3",
     "4": "après bac/Bac +4 à +5",
     "5": "après bac/Bac +4 à +5",
-    "6": "après bac/Bac +6 et +",
-    "7": "après bac/Bac +6 et +",
+    "6": "après bac/Bac +6 et +"
 }
 
+# ================================
+# Fonctions utilitaires simples
+# ================================
 def input_non_empty(prompt):
     while True:
         value = input(prompt).strip()
@@ -29,6 +32,16 @@ def input_non_empty(prompt):
             return value
         print("Ce champ est obligatoire.")
 
+def input_localisation():
+    while True:
+        localisation = input("Entrez une localisation (ville ou code postal) : ").strip()
+        if not localisation:
+            print("Ce champ est obligatoire.")
+            continue
+        if localisation.isdigit() and len(localisation) != 5:
+            print("Si vous entrez un code postal, il doit contenir exactement 5 chiffres.")
+            continue
+        return localisation
 
 def create_driver():
     options = webdriver.ChromeOptions()
@@ -37,217 +50,244 @@ def create_driver():
     options.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-
 def encoder_text_personnalise(text):
-    # Garde les accents, encode seulement espace et &
     return text.replace(" ", "%20").replace("&", "%26")
-
 
 def construire_url(mot_cle, niveau_code):
     base_url = "https://www.onisep.fr/recherche"
-
-    niveau_label = NIVEAU_MAPPING.get(niveau_code.strip(), "")
-    if not niveau_label:
-        niveau_label = "après bac"
-
+    niveau_label = NIVEAU_MAPPING.get(niveau_code.strip(), "après bac")
+    niveau_label = niveau_label.replace(" à +", " à\u00A0+")
     niveau_encoded = quote(niveau_label)
-
-    query_params = {
-        "context": "formation",
-    }
-    query_string = urlencode(query_params)
-
-    mot_cle_encode = encoder_text_personnalise(mot_cle)
-    niveau_param = f"sf[niveau_enseignement_mid][]={niveau_encoded}"
-
-    url = f"{base_url}?{query_string}&{niveau_param}&text={mot_cle_encode}"
+    query = urlencode({"context": "formation"})
+    url = f"{base_url}?{query}&sf[niveau_enseignement_mid][]={niveau_encoded}&text={encoder_text_personnalise(mot_cle)}"
     return url
 
-
-# =================== Première page de recherche ====================
-def rechercher_formations(url, max_results=20):
-    base_url = "https://www.onisep.fr"
-    driver = create_driver()
-    wait = WebDriverWait(driver, 10)
-
+# ================================
+# Recherche de formations sur les pages Onisep
+# ================================
+def rechercher_formations(driver, url, max_results=20):
     formations = []
     page = 1
+    wait = WebDriverWait(driver, 10)
 
+    driver.get(url + "&page=1")
     try:
-        while len(formations) < max_results and len(formations) < 50:
-            paged_url = url+"&page="+str(page)
-            print(f"\n🔄 Chargement page {page} : {paged_url}")
-            driver.get(paged_url)
+        total_count_elem = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "span.search-ui-total-count")))
+        total_count = int(total_count_elem.text.strip())
+    except:
+        total_count = max_results  # fallback si élément non trouvé
+
+    total_to_fetch = min(max_results, total_count)
+
+    while len(formations) < total_to_fetch:
+        if page > 1:
+            driver.get(url + "&page=" + str(page))
             time.sleep(2)
 
+        try:
+            wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "tbody tr")))
             rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr")
-            if not rows:
-                break  # plus de résultats
+        except:
+            break
 
-            for row in rows:
-                try:
-                    a_tag = row.find_element(By.TAG_NAME, "a")
-                    title = a_tag.text.strip()
-                    link = urljoin(base_url, a_tag.get_attribute("href"))
-                    formations.append({
-                        "titre": title,
-                        "lien": link
-                    })
-                    if len(formations) >= max_results or len(formations) >= 50:
-                        break
-                except Exception as e:
-                    print(f"⚠️ Erreur ligne : {e}")
-                    continue
-            page += 1
+        if not rows:
+            break
 
-    except Exception as e:
-        print(f"❌ Erreur globale : {e}")
-
-    driver.quit()
-    return formations
-
-# ======= Sortie Nom formation + URL =========
-
-
-
-# ====== Faire en sorte de récupérer l'URL de formation pour ensuite faire les clicks pour restrainde la localisation ======
-def renseigner_localisation(driver, localisation):
-    try:
-        # Attendre que le champ de localisation soit visible
-        champ = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='search-ui-geo-city']"))
-        )
-
-        # Cliquer pour s'assurer qu'il est actif
-        champ.click()
-        time.sleep(0.5)
-
-        # Effacer tout contenu existant
-        champ.clear()
-        time.sleep(0.2)
-
-        # Envoyer la localisation
-        champ.send_keys(localisation)
-        time.sleep(1.5)  # attendre que la suggestion s'affiche (important si autocomplétion)
-
-        # Valider par Entrée si nécessaire
-        champ.send_keys(Keys.TAB)
-        time.sleep(1.5)
-        champ.send_keys(Keys.RETURN)
-
-        print(f"📍 Localisation renseignée : {localisation}")
-    except Exception as e:
-        print(f"❌ Erreur lors de la saisie de la localisation : {e}")
-
-
-
-# Récupérer l'URL de la formation + lancer le click barre de recherche (localisation) + extraction des infos complémentaire
-def formations(driver,url, localisation):
-    wait = WebDriverWait(driver, 10)
-    driver.get(url)
-    time.sleep(5)
-
-    formations = []
-    #============= ^ valide ^ ==================
-
-    # Extraire la durée
-    try:
-        print("Tentative de récupération de la durée...")
-        duree = driver.find_element(
-            By.XPATH, "//div[contains(text(),'Durée de la formation')]/strong"
-        ).text.strip()
-        print(f"Durée : {duree}")
-    except Exception as e:
-        duree = "N/A"
-        print(f"Durée non trouvée : {e}")
-
-    # Extraire la nature de la formation
-    try:
-        print("Tentative de récupération de la nature de la formation...")
-        nature = driver.find_element(
-            By.XPATH, "//div[contains(@class, 'tag')][.//span[contains(text(),'Nature de la formation')]]//li//strong"
-        ).text.strip()
-        print(f"Nature : {nature}")
-    except Exception as e:
-        nature = "N/A"
-        print(f"Nature non trouvée : {e}")
-
-    # Extraire le type de formation
-    try:
-        print("Tentative de récupération du type de formation...")
-        type_formation = driver.find_element(
-            By.XPATH, "//div[contains(@class, 'tag') and .//text()[contains(.,'Type de formation')]]/span/strong"
-        ).text.strip()
-        print(f"Type : {type_formation}")
-    except Exception as e:
-        type_formation = "N/A"
-        print(f"Type non trouvé : {e}")
-
-
-    # Extraire les établissements (nom + commune + code postal)
-    etablissements = []
-    try:
-        table_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-        for tr in table_rows:
+        for row in rows:
             try:
-                nom = tr.find_element(By.TAG_NAME, "a").text.strip()
-                ville = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Commune"]').text.strip()
-                code_postal = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Code postal"]').text.strip()
-                etablissements.append(f"{nom} ({ville}, {code_postal})")
+                a_tag = row.find_element(By.TAG_NAME, "a")
+                title = a_tag.text.strip()
+                link = urljoin("https://www.onisep.fr", a_tag.get_attribute("href"))
+                if any(f['lien'] == link for f in formations):
+                    continue
+                formations.append({"titre": title, "lien": link})
+                if len(formations) >= total_to_fetch:
+                    break
             except:
                 continue
-    except:
-        pass
 
-        # Extraire les établissements (nom + commune + code postal)
-        # etablissements = []
-        # try:
-        #     table_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-        #     for tr in table_rows:
-        #         try:
-        #             a_tag = tr.find_element(By.TAG_NAME, "a")
-        #             nom = a_tag.text.strip()
-        #             lien = urljoin(base_url, a_tag.get_attribute("href"))
-        #             ville = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Commune"]').text.strip()
-        #             code_postal = tr.find_element(By.CSS_SELECTOR, 'td[data-label="Code postal"]').text.strip()
-        #             etablissements.append(f"{nom} ({ville}, {code_postal}) → {lien}")
-        #         except:
-        #             continue
-        # except:
-        #     pass
+        page += 1
 
+    return formations
 
-    # formations.append({
-    #     "durée": duree,
-    #     "nature": nature,
-    #     "type": type_formation,
-    #     "établissements conseillés": " | ".join(etablissements) if etablissements else "N/A"
-    # })
+# ================================
+# Saisie automatique de la localisation dans Onisep
+# ================================
+def renseigner_localisation(driver, localisation):
+    if not localisation:
+        return
+        
+    try:
+        print(f"🔍 Tentative de filtrage par localisation : {localisation}")
+        wait = WebDriverWait(driver, 10)
+        
+        # Plusieurs sélecteurs possibles pour le champ de localisation
+        selectors = [
+            "input.geo-city",
+            "input[name='search-ui-geo-city']",
+            "input[placeholder*='ville']",
+            "input[placeholder*='localisation']"
+        ]
+        
+        input_geo = None
+        for selector in selectors:
+            try:
+                input_geo = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                print(f"✅ Champ de localisation trouvé avec : {selector}")
+                break
+            except:
+                continue
+                
+        if not input_geo:
+            print("⚠️ Champ de localisation non trouvé, pas de filtrage")
+            return
+            
+        # Remplir le champ
+        input_geo.clear()
+        time.sleep(1)
+        input_geo.send_keys(localisation)
+        time.sleep(2)
+        
+        # Chercher la liste d'autocomplétion
+        try:
+            driver.execute_script("arguments[0].scrollIntoView(true);", input_geo)
+            autocomplete = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.autocomplete-list-wrapper a")))
+            time.sleep(1)
+            autocomplete.click()
+            print("✅ Localisation sélectionnée via autocomplétion")
+        except:
+            # Si pas d'autocomplétion, valider avec Enter
+            input_geo.send_keys(Keys.RETURN)
+            print("✅ Localisation validée avec Enter")
 
-    # Retour à la page de recherche
-    time.sleep(2)
+        time.sleep(3)  # Attendre le filtrage
+        
+    except Exception as e:
+        print(f"❌ Erreur lors du filtrage par localisation : {e}")
 
-    driver.quit()
-    return {
-        "durée": duree,
-        "nature": nature,
-        "type": type_formation,
-        "établissements conseillés": " | ".join(etablissements) if etablissements else "N/A"
+# ================================
+# Extraction des infos complémentaires sur une formation
+# ================================
+def formations(driver, url, localisation):
+    wait = WebDriverWait(driver, 20)
+    driver.get(url)
+    time.sleep(0.5)
+
+    result = {
+        "durée": "N/A",
+        "nature": "N/A",
+        "type": "N/A",
+        "établissements_conseillés": "N/A"
     }
 
+    if localisation:
+        renseigner_localisation(driver, localisation)
+        time.sleep(3)
 
+    # Sélecteurs d'extraction
+    def extraire_info(selectors, xpath=True):
+        for sel in selectors:
+            try:
+                elem = driver.find_element(By.XPATH if xpath else By.CSS_SELECTOR, sel)
+                return elem.text.strip()
+            except:
+                continue
+        return "N/A"
 
-def export_csv(data, filename="resultats_formations_onisep.csv"):
+    result["durée"] = extraire_info([
+        "//div[contains(text(),'Durée de la formation')]/strong",
+        "//div[contains(text(),'Durée')]/following-sibling::*/strong",
+        "//strong[contains(text(),'an') or contains(text(),'mois') or contains(text(),'semestre')]",
+        "//*[contains(text(),'Durée')]/..//strong",
+        "//*[contains(@class,'duration')]"
+    ])
+
+    result["nature"] = extraire_info([
+        "//div[contains(@class, 'tag')][.//span[contains(text(),'Nature de la formation')]]//li//strong",
+        "//span[contains(text(),'Nature')]/following-sibling::strong",
+        "//*[contains(text(),'Nature')]/..//strong",
+        "//div[contains(text(),'Nature')]//strong"
+    ])
+
+    result["type"] = extraire_info([
+        "//div[contains(@class, 'tag') and .//text()[contains(.,'Type de formation')]]/span/strong",
+        "//span[contains(text(),'Type')]/following-sibling::strong",
+        "//*[contains(text(),'Type')]/..//strong",
+        "//div[contains(text(),'Type')]//strong"
+    ])
+
+    # Extraction des établissements
+    etablissements = []
+    table_selectors = ["table tbody tr", ".table tbody tr", "tbody tr", "[data-label] tr", ".establishment-list tr"]
+
+    for table_selector in table_selectors:
+        try:
+            time.sleep(2)
+            rows = driver.find_elements(By.CSS_SELECTOR, table_selector)
+            if not rows:
+                continue
+
+            for tr in rows:
+                try:
+                    nom = tr.find_element(By.TAG_NAME, "a").text.strip()
+
+                    ville = "N/A"
+                    for sel in ['td[data-label="Commune"]', 'td[data-label="Ville"]', '.commune', '.ville']:
+                        try:
+                            ville = tr.find_element(By.CSS_SELECTOR, sel).text.strip()
+                            break
+                        except:
+                            continue
+
+                    code_postal = "N/A"
+                    for sel in ['td[data-label="Code postal"]', 'td[data-label="CP"]', '.code-postal', '.cp']:
+                        try:
+                            code_postal = tr.find_element(By.CSS_SELECTOR, sel).text.strip()
+                            break
+                        except:
+                            continue
+
+                    info = f"{nom} ({ville}, {code_postal})" if ville != "N/A" and code_postal != "N/A" else nom
+                    etablissements.append(info)
+                except:
+                    continue
+            break
+        except:
+            continue
+
+    result["établissements_conseillés"] = " | ".join(etablissements) if etablissements else "N/A"
+    return result
+
+# ================================
+# Export vers fichier CSV (nom nettoyé)
+# ================================
+def export_csv(data, filename):
+    if not filename:
+        filename="resultats_formations_onisep.csv"
+    
+    else:
+        caracteres_interdits = r'[\\/*?:"<>|]'
+        filename = re.sub(caracteres_interdits, '', filename).replace(" ", "_")
+
+        if filename.lower().endswith(".csv"):
+            filename = filename[:-4]
+            
+        filename = filename.replace(".", "") + ".csv"
+
     if not data:
         print("Aucune donnée à exporter.")
         return
+
     with open(filename, mode="w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=data[0].keys(), delimiter=';')
         writer.writeheader()
         writer.writerows(data)
+
     print(f"\n✅ Données exportées dans : {filename}")
 
-
+# ================================
+# Programme principal
+# ================================
 def main():
     print("=== Recherche de formations sur Onisep.fr ===")
     mot_cle = input_non_empty("Mot-clé de recherche (ex: mathématiques) : ")
@@ -259,31 +299,31 @@ def main():
     print("  4 → Bac +4 à +5")
     print("  6 → Bac +6 et +")
     niveau = input("Ton choix (1, 3, 4, 6 ou vide) : ").strip()
-    localisation = input("Entrez une ville ou une région (facultatif) : ").strip()
+
+    print("📍 Pour une **ville**, indique le code postal** (ex : Nîmes = 30000).")
+    print("   Pour un **département** ou une **région**, indique son **nom complet** (ex : Gard, Occitanie).")
+    localisation = input_localisation()
+
     max_results_str = input("Nombre max de résultats (défaut = 10, max = 50) : ").strip()
     max_results = int(max_results_str) if max_results_str.isdigit() else 10
     max_results = min(max_results, 50)
 
+    nom_fichier = input("Nom du fichier en sortie : ").strip()
 
-    search_url = construire_url(mot_cle, niveau)
-    src_formations = rechercher_formations(search_url, max_results=max_results)
-    
     driver = create_driver()
-    full_data = []
 
-    for formation in src_formations:
-        print(f"Infos de {formation['titre']}...")
-        print(f"Infos de {formation['lien']}...")
-        test = formations(driver, formation['lien'], localisation)
-        # fulldata
-        print(f"Durée : {test['durée']}")
+    try:
+        search_url = construire_url(mot_cle, niveau)
+        src_formations = rechercher_formations(driver, search_url, max_results=max_results)
 
-        full_data.append({**formation, **test})
-    driver.quit()
-    
-   
-    export_csv(full_data)
+        full_data = []
+        for formation in src_formations:
+            infos = formations(driver, formation['lien'], localisation)
+            full_data.append({**formation, **infos})
 
+        export_csv(full_data, nom_fichier)
+    finally:
+        driver.quit()
 
 if __name__ == "__main__":
     main()
